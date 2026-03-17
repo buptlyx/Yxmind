@@ -1,10 +1,11 @@
-from transformers import PretrainedConfig#从huggingface中导入pretanedconfig的类
+from transformers import PretrainedConfig
+import torch
+import torch.nn as nn
 
+class YxMindConfig(PretrainedConfig):
+    model_type = "yxmind"
 
-class MiniMindConfig(PretrainedConfig):#类的括号中是父类，说明minimindconfig继承了huggingface中的pretrainedconfig类
-    model_type = "minimind"
-
-    def __init__(#类中的__init__是构造函数，当创建类的时候，会自动调用这个函数
+    def __init__(
             self,
             dropout: float = 0.0,#训练时随机屏蔽掉一些神经元，防止过拟合。dropout为0，表示默认不开启dropout。
             bos_token_id: int = 1,#句首/句尾的特殊token的id
@@ -59,10 +60,7 @@ class MiniMindConfig(PretrainedConfig):#类的括号中是父类，说明minimin
             "type": "yarn"
         } if self.inference_rope_scaling else None
         self.flash_attn = flash_attn
-        ####################################################
-        # Here are the specific configurations of MOE
-        # When use_moe is false, the following is invalid
-        ####################################################
+
         self.use_moe = use_moe
         self.num_experts_per_tok = num_experts_per_tok  # 每个token选择的专家数量
         self.n_routed_experts = n_routed_experts  # 总的专家数量
@@ -71,3 +69,20 @@ class MiniMindConfig(PretrainedConfig):#类的括号中是父类，说明minimin
         self.aux_loss_alpha = aux_loss_alpha  # 辅助损失的alpha参数
         self.seq_aux = seq_aux  # 是否在序列级别上计算辅助损失
         self.norm_topk_prob = norm_topk_prob  # 是否标准化top-k概率
+
+
+# 继承nn.Module类
+
+
+class RMSNorm(nn.Module):
+    def __init__(self,dim:int,eps:float=1e-5):
+        super().__init__()
+        self.dim=dim
+        self.eps=eps
+        self.weight=nn.Parameter(torch.ones(dim))
+# norm
+    def _norm(self,x):
+        return x*torch.rsqrt(x.pow(2).mean(-1,keepdim=True)+self.eps)
+# forward
+    def forward(self,x):
+        return self.weight*self._norm(x.float()).type_as(x)
