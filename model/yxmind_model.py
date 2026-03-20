@@ -1,7 +1,8 @@
 from transformers import PretrainedConfig
 import torch
 import torch.nn as nn
-
+import math
+from typing import Optional
 class YxMindConfig(PretrainedConfig):
     model_type = "yxmind"
 
@@ -52,8 +53,8 @@ class YxMindConfig(PretrainedConfig):
         self.inference_rope_scaling = inference_rope_scaling
         # 外推长度 = factor * original_max_position_embeddings = 32768
         self.rope_scaling = {
-            "beta_fast": 32,
-            "beta_slow": 1,
+            "beta_fast": 32,#转32圈视为高频
+            "beta_slow": 1,#转1圈视为低频
             "factor": 16,
             "original_max_position_embeddings": 2048,
             "attention_factor": 1.0,
@@ -86,3 +87,62 @@ class RMSNorm(nn.Module):
 # forward
     def forward(self,x):
         return self.weight*self._norm(x.float()).type_as(x)
+
+#提前计算每个维度的频率，生成cos和sin矩阵
+def precompute_freqs_cis(dim: int, end: int = 32 * 1024, rope_base=10000, rope_scaling: Optional[dict] = None):
+    # 初始化 RoPE 的基础频率
+    freqs, attn_factor = (
+        1.0 / rope_base ** (torch.arange(0, dim, 2)[:(dim // 2)].float() / dim),
+        1.0
+    )#torch.arang(0,dim,2)生成一个0到dim的偶数序列，公差为2,。如果dim本身是偶数，那么[:(dim//2)]这一步就会保留所有元素。最后除以dim进行归一化。
+    #factor是一个缩放因子，默认是1，这里留一个接口。
+
+    #如果要做长上下文扩展，就进入scaling逻辑；否则用原始的RoPE频率。
+    if rope_scaling is not None:
+        #从字典中提取参数
+        #orig_max模型训练时的原始最大长度
+        #factor扩长倍数
+        #beta_fast/beta_slow控制从哪些频率开始过渡缩放
+        orig_max, factor, beta_fast, beta_slow = (
+            rope_scaling["original_max_position_embeddings"],
+            rope_scaling["factor"],
+            rope_scaling["beta_fast"],
+            rope_scaling["beta_slow"]
+        )
+        #只有推理长度超过训练长度才进行缩放
+        if end > orig_max:
+            inv_dim = lambda b: (dim * math.log(orig_max / (b * 2 * math.pi))) / (2 * math.log(rope_base))
+
+            low, high = (
+                #low是开始缩放的索引
+                #high是完全缩放的索引
+                max(math.floor(inv_dim(beta_fast)), 0),
+                min(math.ceil(inv_dim(beta_slow)), dim // 2 - 1)
+                #floor和ceil分别是向上取整和向下取整
+            )
+
+            #ramp是一个缩放系数
+            #当索引小于low时，ramp为0，不进行缩放；当索引大于high时，ramp为1，完全缩放；在low与high之间进行线性缩放。
+            ramp = torch.clamp(
+                (torch.arange(dim // 2, device=freqs.device).float() - low) / max(high - low, 0.001),
+                0, 1
+            )
+
+            freqs = freqs * (1 - ramp + ramp / factor)
+
+    t = torch.arange(end, device=freqs.device).float()
+    #outer是外积操作
+    #下面的代码创建出来一个维度cos和sin的查询表
+    freqs = torch.outer(t, freqs).float()
+    freqs_cos = torch.cat([torch.cos(freqs), torch.cos(freqs)], dim=-1) * attn_factor
+    freqs_sin = torch.cat([torch.sin(freqs), torch.sin(freqs)], dim=-1) * attn_factor
+    return freqs_cos, freqs_sin
+
+#编写RoPE代码
+def apply_rotary_pos_emb(q,k,cos,sin,position_ids=None,unsqueeze_dim=1):
+    #rotate_half是一个辅助旋转函数
+    def rotate_half(x):
+        return torch.cat((-x[..., x.shape[-1] // 2:], x[..., : x.shape[-1] // 2]), dim=-1)
+    q_embed = (q * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(q) * sin.unsqueeze(unsqueeze_dim))
+    k_embed = (k * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(k) * sin.unsqueeze(unsqueeze_dim))
+    return q_embed, k_embed
