@@ -1,4 +1,5 @@
-from transformers import PretrainedConfig
+from transformers import PreTrainedModel,PretrainedConfig,GenerationMixin
+from transformers.modeling_outputs import CausalLMOutputWithPast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -385,3 +386,52 @@ class YxMindModel(nn.Module):
         hidden_states = self.norm(hidden_states)
 
         return hidden_states, presents
+
+#把隐藏层输出映射到词表大小的维度上。
+class YxMindForCausalLM(PreTrainedModel,GenerationMixin):
+    config_class=YxMindConfig
+
+    def __init__(self,config:YxMindConfig):
+        self.config=config
+        super().__init__(config)
+
+        self.model=YxMindModel(config)
+
+        #把输出的隐藏层维度映射到词表大小中，得到每个token的预测分布
+        self.lm_head=nn.Linear(
+            self.config.hidden_size,self.config.vocab_size,bias=False
+        )
+        
+        #输出层的权重和嵌入层的权重共享
+        self.model.embed_tokens.weight=self.lm_head.weight
+
+        self.OUT=CausalLMOutputWithPast()
+
+    def forward(self,
+                    input_ids: Optional[torch.Tensor] = None,
+                    attention_mask: Optional[torch.Tensor] = None,
+                    labels: Optional[torch.Tensor] = None,
+                    past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+                    use_cache: bool = False,
+                    logits_to_keep: Union[int, torch.Tensor] = 0,
+                    **args):
+            hidden_states, past_key_values= self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                **args
+            )
+            slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+            logits = self.lm_head(hidden_states[:, slice_indices, :])
+
+            loss = None
+            if labels is not None:
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
+                loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=-100)
+
+            output = CausalLMOutputWithPast(loss=loss, logits=logits, past_key_values=past_key_values, hidden_states=hidden_states)
+
+            return output
+
