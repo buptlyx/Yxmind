@@ -124,7 +124,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MokioMind Pretraining")
+    parser = argparse.ArgumentParser(description="YxMind Pretraining")
 
     # ========== 基础训练参数 ==========
     parser.add_argument(
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     # ========== 实验跟踪参数 ==========
     parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
     parser.add_argument(
-        "--wandb_project", type=str, default="MokioMind-Pretrain", help="wandb项目名"
+        "--wandb_project", type=str, default="YxMind-Pretrain", help="wandb项目名"
     )
 
     # 解析命令行参数
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     os.makedirs(args.save_dir, exist_ok=True)  # 确保保存目录存在
 
     # 创建MiniMind模型配置
-    lm_config = MokioMindConfig(
+    lm_config = YxMindConfig(
         hidden_size=args.hidden_size,
         num_hidden_layers=args.num_hidden_layers,
         use_moe=bool(args.use_moe),
@@ -277,7 +277,7 @@ if __name__ == "__main__":
         resume = "must" if wandb_id else None  # 必须恢复到指定实验
 
         # 构建实验名称，包含关键超参数
-        wandb_run_name = f"MokioMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
+        wandb_run_name = f"YxMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
         wandb.init(
             project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume
         )
