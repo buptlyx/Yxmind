@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import Optional,Tuple
+from transformers.activations import ACT2FN
 class YxMindConfig(PretrainedConfig):
     model_type = "yxmind"
 
@@ -238,3 +239,27 @@ class Attention(nn.Module):
         output = output.transpose(1, 2).reshape(bsz, seq_len, -1)
         output = self.resid_dropout(self.o_proj(output))
         return output, past_kv
+
+class FeedForward(nn.Module):#这是一个可训练的网络模块
+    def __init__(self, config: YxMindConfig):
+        super().__init__()#这是调用父类nn.Module的初始化方法
+        #传入一个config配置对象，包含以下这些部分
+        #hidden_size隐藏层的维度
+        #intermediate_size中间层的维度
+        #dropout丢弃率
+        #hidden_act激活函数类型
+
+        #如果用户没有指定中间层的维度，那么就根据hidden_size计算一个默认的维度，通常是hidden_size的8/3倍
+        if config.intermediate_size is None:
+            intermediate_size = int(config.hidden_size * 8 / 3)
+            config.intermediate_size = 64 * ((intermediate_size + 64 - 1) // 64)#这一步是取到一个大于等于intermediate_size的最小的的64的倍数，这样可以更好地利用GPU的并行计算能力
+        #定义一个线性层，把hidden_size维度的输入映射到intermediate_size维度
+        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        #定义一个映射回去hidden_size维度的线性层
+        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.dropout = nn.Dropout(config.dropout)
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def forward(self, x):
+        return self.dropout(self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)))
